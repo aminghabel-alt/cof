@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="CoF">
+<meta name="theme-color" content="#000000">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>Circle of Fifths</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@200;300;400&display=swap');
+
+* { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+html,body {
+  width:100%; height:100%;
+  background:#000;
+  overflow:hidden;
+  overscroll-behavior:none;
+  font-family:'Inter',sans-serif;
+}
+
+/* Particle canvas — fullscreen behind everything */
+#pc { position:fixed; inset:0; z-index:0; pointer-events:none; }
+
+/* Main canvas for circle */
+#cc { position:fixed; inset:0; z-index:1; pointer-events:none; }
+
+/* Mic button — bottom center */
+#mic-btn {
+  position:fixed;
+  bottom: max(32px, env(safe-area-inset-bottom, 20px));
+  left:50%; transform:translateX(-50%);
+  z-index:10;
+  width:56px; height:56px; border-radius:50%;
+  border:1px solid rgba(255,255,255,.15);
+  background:rgba(255,255,255,.04);
+  backdrop-filter:blur(12px);
+  color:rgba(255,255,255,.5);
+  font-size:22px; cursor:pointer;
+  transition:all .2s;
+  display:flex; align-items:center; justify-content:center;
+}
+#mic-btn.active {
+  border-color:rgba(255,100,100,.5);
+  background:rgba(255,60,60,.1);
+  color:rgba(255,120,120,.8);
+  box-shadow:0 0 20px rgba(255,60,60,.2);
+}
+#mic-btn:active { transform:translateX(-50%) scale(.92); }
+
+/* Settings button — top right */
+#settings-btn {
+  position:fixed;
+  top: max(18px, env(safe-area-inset-top, 10px));
+  right:18px; z-index:10;
+  width:38px; height:38px; border-radius:50%;
+  border:1px solid rgba(255,255,255,.1);
+  background:rgba(255,255,255,.03);
+  backdrop-filter:blur(12px);
+  color:rgba(255,255,255,.3);
+  font-size:16px; cursor:pointer;
+  display:flex; align-items:center; justify-content:center;
+  transition:all .2s;
+}
+#settings-btn:active { transform:scale(.9); }
+
+/* Status dot — top left */
+#status {
+  position:fixed;
+  top: max(22px, env(safe-area-inset-top, 14px));
+  left:18px; z-index:10;
+  display:flex; align-items:center; gap:7px;
+}
+.sdot {
+  width:6px; height:6px; border-radius:50%;
+  background:rgba(255,255,255,.15);
+}
+.sdot.listen {
+  background:#4ade80;
+  box-shadow:0 0 8px rgba(74,222,128,.7);
+  animation:blink .7s infinite;
+}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+#status-note {
+  font-size:.6rem; letter-spacing:.15em;
+  color:rgba(255,255,255,.25);
+  font-weight:200;
+  transition:color .2s;
+  min-width:40px;
+}
+
+/* Settings panel */
+#panel {
+  position:fixed; inset:0; z-index:20;
+  background:rgba(0,0,0,.85);
+  backdrop-filter:blur(20px);
+  display:flex; flex-direction:column;
+  align-items:center; justify-content:center;
+  gap:0;
+  opacity:0; pointer-events:none;
+  transition:opacity .25s;
+}
+#panel.open { opacity:1; pointer-events:all; }
+
+.panel-title {
+  font-size:.6rem; letter-spacing:.3em; color:rgba(255,255,255,.25);
+  text-transform:uppercase; margin-bottom:28px; font-weight:300;
+}
+
+.toggle-row {
+  display:flex; align-items:center; justify-content:space-between;
+  width:min(320px, calc(100vw - 48px));
+  padding:14px 0;
+  border-bottom:1px solid rgba(255,255,255,.06);
+  cursor:pointer;
+}
+.toggle-row:last-of-type { border-bottom:none; }
+.toggle-label {
+  font-size:.75rem; color:rgba(255,255,255,.5);
+  font-weight:300; letter-spacing:.05em;
+}
+.toggle-label span {
+  font-size:.55rem; color:rgba(255,255,255,.2);
+  margin-left:8px; letter-spacing:.1em;
+}
+.tog {
+  width:38px; height:22px; border-radius:11px;
+  background:rgba(255,255,255,.08);
+  border:1px solid rgba(255,255,255,.1);
+  position:relative; transition:background .2s, border-color .2s;
+  flex-shrink:0;
+}
+.tog.on { background:rgba(255,255,255,.15); border-color:rgba(255,255,255,.25); }
+.tog-k {
+  position:absolute; top:3px; left:3px;
+  width:14px; height:14px; border-radius:50%;
+  background:rgba(255,255,255,.3);
+  transition:transform .2s, background .2s;
+}
+.tog.on .tog-k { transform:translateX(16px); background:#fff; }
+
+.panel-close {
+  margin-top:32px;
+  font-size:.6rem; letter-spacing:.2em; color:rgba(255,255,255,.2);
+  text-transform:uppercase; cursor:pointer; padding:8px;
+}
+.panel-close:active { color:rgba(255,255,255,.5); }
+</style>
+</head>
+<body>
+
+<canvas id="pc"></canvas>
+<canvas id="cc"></canvas>
+
+<div id="status">
+  <div class="sdot" id="sdot"></div>
+  <div id="status-note"></div>
+</div>
+
+<button id="settings-btn">⋯</button>
+<button id="mic-btn">🎙</button>
+
+<!-- Settings Panel -->
+<div id="panel">
+  <div class="panel-title">Options</div>
+
+  <div class="toggle-row" data-key="glow">
+    <div class="toggle-label">Chromatic Glow <span>PARTICLES</span></div>
+    <div class="tog on" id="tog-glow"><div class="tog-k"></div></div>
+  </div>
+  <div class="toggle-row" data-key="trail">
+    <div class="toggle-label">Motion Trail <span>3 STEPS</span></div>
+    <div class="tog on" id="tog-trail"><div class="tog-k"></div></div>
+  </div>
+  <div class="toggle-row" data-key="notenames">
+    <div class="toggle-label">Note Names <span>C G D...</span></div>
+    <div class="tog" id="tog-notenames"><div class="tog-k"></div></div>
+  </div>
+  <div class="toggle-row" data-key="degrees">
+    <div class="toggle-label">Interval Degrees <span>1 b2 2...</span></div>
+    <div class="tog on" id="tog-degrees"><div class="tog-k"></div></div>
+  </div>
+  <div class="toggle-row" data-key="indicator">
+    <div class="toggle-label">Info Panel <span>NOTE · INTERVAL</span></div>
+    <div class="tog" id="tog-indicator"><div class="tog-k"></div></div>
+  </div>
+  <div class="toggle-row" data-key="progression">
+    <div class="toggle-label">Chord Progression <span>I ii iii...</span></div>
+    <div class="tog" id="tog-progression"><div class="tog-k"></div></div>
+  </div>
+
+  <div class="panel-close" id="panel-close">close</div>
+</div>
+
+<!-- Info panel (optional) -->
+<div id="info-panel" style="
+  position:fixed; bottom:110px; left:50%; transform:translateX(-50%);
+  z-index:9; display:none; flex-direction:column; align-items:center; gap:4px;
+  pointer-events:none;
+">
+  <div id="info-note" style="font-size:2.5rem;font-family:'Inter',sans-serif;font-weight:200;color:rgba(255,255,255,.8);letter-spacing:.05em;transition:color .2s;"></div>
+  <div id="info-intv" style="font-size:.6rem;letter-spacing:.2em;color:rgba(255,255,255,.3);font-weight:300;"></div>
+</div>
+
+<script>
+// ════════════════════════════════════════════════════════
+//  COLOR SYSTEM — 12 chromatic hues
+// ════════════════════════════════════════════════════════
+const HUE=[240,210,170,140,95,55,30,0,330,300,270,255];
+const ILBL=['1','b2','2','b3','3','4','#4','5','b6','6','b7','7'];
+const h=(hue,s=75,l=62)=>`hsl(${hue},${s}%,${l}%)`;
+const ha=(hue,s=75,l=62,a=1)=>`hsla(${hue},${s}%,${l}%,${a})`;
+
+// ════════════════════════════════════════════════════════
+//  MUSIC DATA
+// ════════════════════════════════════════════════════════
+const CIRCLE=[
+  {name:'C'},{name:'G'},{name:'D'},{name:'A'},{name:'E'},{name:'B'},
+  {name:'F♯',alt:'G♭'},{name:'D♭',alt:'C♯'},{name:'A♭',alt:'G♯'},
+  {name:'E♭',alt:'D♯'},{name:'B♭',alt:'A♯'},{name:'F'},
+];
+const CHROMA=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+const N2C={C:0,G:7,D:2,A:9,E:4,B:11,'F♯':6,'D♭':1,'A♭':8,'E♭':3,'B♭':10,F:5};
+const INTVS=[
+  {en:'Unison',short:'P1',s:0},{en:'m2',short:'m2',s:1},
+  {en:'M2',short:'M2',s:2},{en:'m3',short:'m3',s:3},
+  {en:'M3',short:'M3',s:4},{en:'P4',short:'P4',s:5},
+  {en:'♭5',short:'TT',s:6},{en:'P5',short:'P5',s:7},
+  {en:'m6',short:'m6',s:8},{en:'M6',short:'M6',s:9},
+  {en:'m7',short:'m7',s:10},{en:'M7',short:'M7',s:11},
+];
+const DIAT_ST=[0,2,4,5,7,9,11];
+const DIAT_R=['I','ii','iii','IV','V','vi','vii°'];
+function diatMap(tc){const m={};DIAT_ST.forEach((s,i)=>m[(tc+s)%12]=DIAT_R[i]);return m;}
+function c2idx(c){for(let i=0;i<12;i++)if(N2C[CIRCLE[i].name]===c)return i;return -1;}
+
+// ════════════════════════════════════════════════════════
+//  CANVAS SETUP
+// ════════════════════════════════════════════════════════
+const pc=document.getElementById('pc'); // particles
+const cc=document.getElementById('cc'); // circle
+const p2=pc.getContext('2d');
+const c2=cc.getContext('2d');
+
+let W,H,CX,CY,R; // circle radius
+
+function resize(){
+  W=window.innerWidth; H=window.innerHeight;
+  pc.width=cc.width=W; pc.height=cc.height=H;
+  CX=W/2; CY=H/2;
+  R=Math.min(W,H)*0.38;
+  drawCircle();
+}
+window.addEventListener('resize',resize);
+
+// ════════════════════════════════════════════════════════
+//  OPTIONS STATE
+// ════════════════════════════════════════════════════════
+const OPT={glow:true,trail:true,notenames:false,degrees:true,indicator:false,progression:false};
+
+// ════════════════════════════════════════════════════════
+//  MUSIC STATE
+// ════════════════════════════════════════════════════════
+let tChroma=-1; // tonic
+let detChroma=-1;
+// Trail: array of {from, to, age} age=0 newest
+const trail=[];
+const TRAIL_MAX=3;
+
+// ════════════════════════════════════════════════════════
+//  CIRCLE DRAWING
+// ════════════════════════════════════════════════════════
+const N=12, SL=(2*Math.PI)/N, OFF=-Math.PI/2-SL/2;
+
+function segAngles(i){return[OFF+i*SL, OFF+i*SL+SL];}
+function segMid(i){return OFF+i*SL+SL/2;}
+function pXY(a,r){return[CX+r*Math.cos(a),CY+r*Math.sin(a)];}
+
+// Pre-compute segment center positions
+function segCenter(i){
+  const m=segMid(i), r=R;
+  return[CX+r*Math.cos(m), CY+r*Math.sin(m)];
+}
+
+function drawArc(ctx,r,a1,a2,w,color){
+  ctx.beginPath();
+  ctx.arc(CX,CY,r,a1,a2);
+  ctx.strokeStyle=color; ctx.lineWidth=w; ctx.stroke();
+}
+
+function drawCircle(){
+  c2.clearRect(0,0,W,H);
+
+  const RO=R, RI=R*0.58;
+  const segW=RO-RI;
+
+  for(let i=0;i<N;i++){
+    const [a1,a2]=segAngles(i);
+    const mid=segMid(i);
+    const semi=tChroma!==-1?(N2C[CIRCLE[i].name]-tChroma+12)%12:i;
+    const hue=HUE[semi];
+    const c=N2C[CIRCLE[i].name];
+    const isTonic=tChroma!==-1&&c===tChroma;
+    const isDet=detChroma!==-1&&c===detChroma;
+
+    // Segment fill
+    c2.beginPath();
+    c2.arc(CX,CY,RO,a1,a2);
+    c2.arc(CX,CY,RI,a2,a1,true);
+    c2.closePath();
+
+    if(OPT.glow){
+      const baseA=isTonic?0.22:isDet?0.18:0.08;
+      c2.fillStyle=ha(hue,70,50,baseA);
+      c2.fill();
+      // Bright arc on outer edge
+      const arcA=isTonic?0.9:isDet?0.75:0.35;
+      drawArc(c2,(RO+RI)/2+segW*0.35,a1+0.02,a2-0.02,isTonic||isDet?2.5:1.2,ha(hue,80,65,arcA));
+    } else {
+      // Classic minimal
+      if(isTonic||isDet){
+        c2.fillStyle=isTonic?'rgba(255,112,64,0.15)':'rgba(79,195,212,0.1)';
+        c2.fill();
+        drawArc(c2,(RO+RI)/2+segW*0.35,a1+0.02,a2-0.02,2,isTonic?'rgba(255,112,64,.7)':'rgba(79,195,212,.6)');
+      } else {
+        drawArc(c2,(RO+RI)/2+segW*0.35,a1+0.02,a2-0.02,.8,'rgba(255,255,255,.12)');
+      }
+    }
+
+    // Degree labels (1, b2, 2 ...)
+    if(OPT.degrees){
+      const lr=RO+14;
+      const [lx,ly]=pXY(mid,lr);
+      const labelHue=OPT.glow?hue:0;
+      const labelColor=OPT.glow
+        ? ha(hue,70,70,isTonic||isDet?1:0.45)
+        : (isTonic||isDet?'rgba(255,255,255,.9)':'rgba(255,255,255,.35)');
+      c2.fillStyle=labelColor;
+      c2.font=`${isTonic||isDet?'300':'200'} ${isTonic||isDet?12:10}px Inter`;
+      c2.textAlign='center'; c2.textBaseline='middle';
+      c2.fillText(tChroma!==-1?ILBL[semi]:ILBL[i],lx,ly);
+    }
+
+    // Note names (C, G, D...)
+    if(OPT.notenames){
+      const nr=(RO+RI)/2;
+      const [nx,ny]=pXY(mid,nr);
+      const noteColor=OPT.glow
+        ? ha(hue,75,72,isTonic||isDet?1:0.5)
+        : (isTonic||isDet?'rgba(255,255,255,.9)':'rgba(255,255,255,.4)');
+      c2.fillStyle=noteColor;
+      c2.font=`300 ${isTonic||isDet?13:11}px Inter`;
+      c2.textAlign='center'; c2.textBaseline='middle';
+      c2.fillText(CIRCLE[i].name,nx,ny);
+    }
+
+    // Progression labels inside inner ring
+    if(OPT.progression&&tChroma!==-1){
+      const dm=diatMap(tChroma);
+      const roman=dm[c];
+      if(roman){
+        const pr=RI*0.68;
+        const [px2,py2]=pXY(mid,pr);
+        const progColor=OPT.glow?ha(hue,65,65,.6):'rgba(255,255,255,.3)';
+        c2.fillStyle=progColor;
+        c2.font='200 9px Inter';
+        c2.textAlign='center'; c2.textBaseline='middle';
+        c2.fillText(roman,px2,py2);
+      }
+    }
+
+    // Tiny spoke lines between segments
+    const [sx,sy]=pXY(a1,RO+2);
+    const [ex,ey]=pXY(a1,RI-2);
+    c2.beginPath(); c2.moveTo(sx,sy); c2.lineTo(ex,ey);
+    c2.strokeStyle='rgba(0,0,0,.6)'; c2.lineWidth=.5; c2.stroke();
+  }
+
+  // ── Trail lines ──
+  if(OPT.trail){
+    for(let t=0;t<trail.length;t++){
+      const tr=trail[t];
+      const age=tr.age; // 0=newest, 1,2=older
+      const alpha=[0.7,0.35,0.12][age]||0;
+      if(alpha<=0) continue;
+      const fi=c2idx(tr.from), ti2=c2idx(tr.to);
+      if(fi===-1||ti2===-1) continue;
+      const [fx,fy]=pXY(segMid(fi),R*0.78);
+      const [tx2,ty2]=pXY(segMid(ti2),R*0.78);
+      const semi=(tr.to-tChroma+12)%12;
+      const hue=tChroma!==-1?HUE[semi]:HUE[ti2%12];
+      c2.beginPath();
+      c2.moveTo(fx,fy); c2.lineTo(tx2,ty2);
+      // Gradient line
+      const grad=c2.createLinearGradient(fx,fy,tx2,ty2);
+      grad.addColorStop(0,ha(HUE[tChroma!==-1?(tr.from-tChroma+12)%12:fi%12],75,65,alpha*0.6));
+      grad.addColorStop(1,ha(hue,75,65,alpha));
+      c2.strokeStyle=grad;
+      c2.lineWidth=age===0?1.5:age===1?1:0.6;
+      c2.setLineDash(age===0?[]:[4,4]);
+      c2.stroke();
+      c2.setLineDash([]);
+      // Arrow dot at destination
+      if(age===0){
+        c2.beginPath();
+        c2.arc(tx2,ty2,2.5,0,Math.PI*2);
+        c2.fillStyle=ha(hue,80,70,alpha);
+        c2.fill();
+      }
+    }
+  }
+
+  // Center dot
+  c2.beginPath();
+  c2.arc(CX,CY,3,0,Math.PI*2);
+  c2.fillStyle='rgba(255,255,255,.08)';
+  c2.fill();
+}
+
+// ════════════════════════════════════════════════════════
+//  PARTICLE SYSTEM — cinematic slow-motion
+// ════════════════════════════════════════════════════════
+let particles=[];
+
+class Particle {
+  constructor(x,y,outAngle,hue,freq,rms){
+    this.x=x; this.y=y;
+    // Frequency mapping: low freq = more spread/heavy, high freq = linear/sparse
+    const isLow=freq<200;
+    const isMid=freq>=200&&freq<500;
+    // Angular spread: bass=wide, treble=narrow
+    const spreadMax=isLow?1.4:isMid?0.7:0.25;
+    const ang=outAngle+(Math.random()-0.5)*spreadMax*2;
+    // Slow-motion: very low speed, slow decay
+    const speedBase=isLow?0.6:isMid?0.9:1.3;
+    const speed=(0.3+Math.random()*speedBase)*(0.6+rms*2.5);
+    this.vx=Math.cos(ang)*speed;
+    this.vy=Math.sin(ang)*speed;
+    // Size: bass = large, treble = tiny
+    this.sz=isLow?(1.5+Math.random()*4):(isMid?(0.8+Math.random()*2):(0.3+Math.random()*1.2));
+    this.hue=hue+(Math.random()-0.5)*18;
+    this.life=1;
+    // Slow decay = slow-motion feel
+    this.decay=isLow?0.006+Math.random()*0.008:isMid?0.009+Math.random()*0.01:0.012+Math.random()*0.015;
+    this.gravity=isLow?0.008:isMid?0.012:0.018;
+    this.isLow=isLow;
+  }
+  step(){
+    this.x+=this.vx; this.y+=this.vy;
+    this.vy+=this.gravity;
+    this.vx*=0.995; // minimal drag = floaty
+    this.life-=this.decay;
+    this.sz*=0.998;
+  }
+  draw(){
+    if(this.life<=0) return;
+    p2.save();
+    p2.globalAlpha=Math.max(0,this.life*(this.isLow?0.7:0.85));
+    if(this.sz>1.2){
+      const g=p2.createRadialGradient(this.x,this.y,0,this.x,this.y,this.sz*3);
+      g.addColorStop(0,`hsl(${this.hue},85%,85%)`);
+      g.addColorStop(0.4,`hsl(${this.hue},80%,65%)`);
+      g.addColorStop(1,`hsla(${this.hue},70%,50%,0)`);
+      p2.fillStyle=g;
+      p2.beginPath(); p2.arc(this.x,this.y,this.sz*3,0,Math.PI*2); p2.fill();
+    } else {
+      // Tiny linear streaks for high freq
+      p2.strokeStyle=`hsl(${this.hue},80%,75%)`;
+      p2.lineWidth=this.sz;
+      p2.beginPath();
+      p2.moveTo(this.x,this.y);
+      p2.lineTo(this.x-this.vx*4,this.y-this.vy*4);
+      p2.stroke();
+    }
+    p2.restore();
+  }
+}
+
+function spawnParticles(circleIdx,hue,freq,rms){
+  if(!OPT.glow) return;
+  const outAngle=segMid(circleIdx);
+  // Count: bass=many, treble=few, scaled by rms (attack strength)
+  const baseCnt=freq<200?35:freq<500?20:10;
+  const cnt=Math.floor(baseCnt*(0.4+rms*3));
+  const [bx,by]=pXY(outAngle,R*0.88);
+  for(let i=0;i<cnt;i++) particles.push(new Particle(bx,by,outAngle,hue,freq,rms));
+}
+
+// Particle animation loop
+function animParts(){
+  p2.clearRect(0,0,W,H);
+  particles=particles.filter(p=>p.life>0);
+  particles.forEach(p=>{p.step();p.draw();});
+  requestAnimationFrame(animParts);
+}
+animParts();
+
+// ════════════════════════════════════════════════════════
+//  YIN PITCH DETECTION
+// ════════════════════════════════════════════════════════
+function yin(buf,sr,thr=0.11){
+  const N2=Math.floor(buf.length/2);
+  let rms=0; for(let i=0;i<buf.length;i++) rms+=buf[i]**2; rms=Math.sqrt(rms/buf.length);
+  if(rms<0.007) return{freq:-1,rms};
+  const diff=new Float32Array(N2);
+  for(let tau=1;tau<N2;tau++){let s=0;for(let j=0;j<N2;j++){const d=buf[j]-buf[j+tau];s+=d*d;}diff[tau]=s;}
+  const cm=new Float32Array(N2); cm[0]=1; let sum=0;
+  for(let tau=1;tau<N2;tau++){sum+=diff[tau];cm[tau]=sum>0?diff[tau]*tau/sum:1;}
+  let tau=-1;
+  for(let t=2;t<N2;t++){if(cm[t]<thr){while(t+1<N2&&cm[t+1]<cm[t])t++;tau=t;break;}}
+  if(tau===-1) return{freq:-1,rms};
+  let bt=tau;
+  if(tau>0&&tau<N2-1){const s0=cm[tau-1],s1=cm[tau],s2=cm[tau+1];bt=tau+(s2-s0)/(2*(2*s1-s2-s0));}
+  return{freq:sr/bt,rms};
+}
+function f2note(freq){
+  if(freq<55||freq>1500) return null;
+  const nn=12*(Math.log2(freq/440))+69, r=Math.round(nn), cents=Math.round((nn-r)*100);
+  if(Math.abs(cents)>46) return null;
+  return{note:CHROMA[((r%12)+12)%12],chroma:((r%12)+12)%12,cents,octave:Math.floor(r/12)-1};
+}
+
+// ════════════════════════════════════════════════════════
+//  AUDIO STATE
+// ════════════════════════════════════════════════════════
+let aCtx=null,analyser=null,stream=null,running=false,raf=null,abuf=null;
+let stable=-1,stCnt=0,lastRms=0;
+const STABLE=4;
+
+// Trail update
+function pushTrail(fromC,toC){
+  if(fromC===toC||fromC===-1) return;
+  // Age existing
+  trail.forEach(t=>t.age++);
+  // Remove too old
+  while(trail.length>=TRAIL_MAX) trail.pop();
+  trail.unshift({from:fromC,to:toC,age:0});
+}
+
+// ════════════════════════════════════════════════════════
+//  INFO PANEL UPDATE
+// ════════════════════════════════════════════════════════
+function updateInfo(chroma,freq){
+  if(!OPT.indicator){ document.getElementById('info-panel').style.display='none'; return; }
+  document.getElementById('info-panel').style.display='flex';
+  const note=CHROMA[chroma];
+  const semi=tChroma!==-1?(chroma-tChroma+12)%12:-1;
+  const hue=HUE[semi!==-1?semi:chroma];
+  const nEl=document.getElementById('info-note');
+  nEl.textContent=note;
+  nEl.style.color=OPT.glow?h(hue,75,72):'rgba(255,255,255,.8)';
+  const iEl=document.getElementById('info-intv');
+  if(tChroma!==-1&&semi!==-1) iEl.textContent=INTVS[semi].en+' · '+ILBL[semi];
+  else iEl.textContent=freq>0?`${freq.toFixed(0)} Hz`:'';
+}
+
+// ════════════════════════════════════════════════════════
+//  MAIN DETECTION LOOP
+// ════════════════════════════════════════════════════════
+let lastFreq=440;
+
+function loop(){
+  if(!running) return;
+  analyser.getFloatTimeDomainData(abuf);
+  const{freq,rms}=yin(abuf,aCtx.sampleRate);
+
+  if(freq>0){
+    const info=f2note(freq);
+    if(info){
+      const{note,chroma,octave}=info;
+      lastFreq=freq;
+      lastRms=rms;
+      if(chroma===stable) stCnt++; else{stable=chroma;stCnt=1;}
+      if(stCnt===STABLE){
+        // New stable note detected
+        const prev=detChroma;
+        const idx=c2idx(chroma);
+        if(idx!==-1){
+          const semi=tChroma!==-1?(chroma-tChroma+12)%12:idx%12;
+          const hue=HUE[semi];
+          // Spawn particles
+          spawnParticles(idx,hue,freq,Math.min(rms*8,1));
+          // Trail
+          if(prev!==-1&&prev!==chroma) pushTrail(prev,chroma);
+          detChroma=chroma;
+          // Status
+          document.getElementById('sdot').className='sdot listen';
+          const sn=document.getElementById('status-note');
+          sn.textContent=note+(octave>=0?octave:'');
+          sn.style.color=OPT.glow?ha(hue,70,68,.8):'rgba(255,255,255,.4)';
+          // Tonic: first note sets it if not set
+          if(tChroma===-1) tChroma=chroma;
+          drawCircle();
+          updateInfo(chroma,freq);
+        }
+      }
+    }
+  }
+  raf=requestAnimationFrame(loop);
+}
+
+// ════════════════════════════════════════════════════════
+//  CONTROLS
+// ════════════════════════════════════════════════════════
+
+// Long press circle to reset tonic
+let pressTimer=null;
+cc.addEventListener('touchstart',e=>{
+  pressTimer=setTimeout(()=>{
+    tChroma=-1; detChroma=-1; stable=-1; stCnt=0;
+    trail.length=0;
+    document.getElementById('status-note').textContent='';
+    drawCircle();
+    updateInfo(-1,0);
+    // Small flash
+    p2.clearRect(0,0,W,H);
+  },600);
+},{passive:true});
+cc.addEventListener('touchend',()=>{if(pressTimer)clearTimeout(pressTimer);},{passive:true});
+
+// Tap circle to set tonic manually
+cc.addEventListener('click',e=>{
+  const dx=e.clientX-CX,dy=e.clientY-CY;
+  const dist=Math.sqrt(dx*dx+dy*dy);
+  if(dist<R*0.5||dist>R*1.15) return; // outside ring
+  const angle=Math.atan2(dy,dx);
+  // Find which segment
+  let a=(angle-OFF+Math.PI*2)%(Math.PI*2);
+  const idx=Math.floor(a/SL)%12;
+  tChroma=N2C[CIRCLE[idx].name];
+  trail.length=0;
+  drawCircle();
+  // Burst on tap
+  const semi=0; spawnParticles(idx,HUE[semi],200,0.5);
+  setTimeout(()=>spawnParticles(idx,HUE[semi],200,0.3),120);
+});
+
+// Mic button
+document.getElementById('mic-btn').addEventListener('click',async()=>{
+  if(!running){
+    try{
+      stream=await navigator.mediaDevices.getUserMedia({
+        audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false},video:false
+      });
+      aCtx=new(window.AudioContext||window.webkitAudioContext)({sampleRate:44100});
+      await aCtx.resume();
+      const src=aCtx.createMediaStreamSource(stream);
+      analyser=aCtx.createAnalyser(); analyser.fftSize=4096; analyser.smoothingTimeConstant=0.08;
+      abuf=new Float32Array(analyser.fftSize); src.connect(analyser);
+      running=true;
+      document.getElementById('mic-btn').textContent='⏹';
+      document.getElementById('mic-btn').classList.add('active');
+      loop();
+    }catch(e){
+      document.getElementById('status-note').textContent='denied';
+    }
+  } else {
+    running=false; if(raf)cancelAnimationFrame(raf);
+    if(stream)stream.getTracks().forEach(t=>t.stop());
+    if(aCtx)aCtx.close();
+    document.getElementById('mic-btn').textContent='🎙';
+    document.getElementById('mic-btn').classList.remove('active');
+    document.getElementById('sdot').className='sdot';
+    document.getElementById('status-note').textContent='';
+  }
+});
+
+// Settings
+document.getElementById('settings-btn').addEventListener('click',()=>{
+  document.getElementById('panel').classList.add('open');
+});
+document.getElementById('panel-close').addEventListener('click',()=>{
+  document.getElementById('panel').classList.remove('open');
+  drawCircle();
+});
+document.getElementById('panel').addEventListener('click',e=>{
+  if(e.target===document.getElementById('panel')){
+    document.getElementById('panel').classList.remove('open');
+    drawCircle();
+  }
+});
+
+// Toggle rows
+document.querySelectorAll('.toggle-row').forEach(row=>{
+  row.addEventListener('click',()=>{
+    const key=row.dataset.key;
+    OPT[key]=!OPT[key];
+    const tog=document.getElementById('tog-'+key);
+    tog.className='tog'+(OPT[key]?' on':'');
+    if(key==='indicator') updateInfo(detChroma,lastFreq);
+    drawCircle();
+  });
+});
+
+// Service Worker
+if('serviceWorker' in navigator)
+  window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(()=>{}));
+
+// ── Init ──────────────────────────────────────────────────────────
+resize();
+</script>
+</body>
+</html>
